@@ -1,0 +1,58 @@
+rules_version = '2';
+// DVM project register: Firestore security rules.
+// EDIT the domain in dvm() before publishing (dots written as [.]).
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function me() { return request.auth.token.email.lower(); }
+    function dvm() {
+      return request.auth != null
+        && request.auth.token.email_verified == true
+        && me().matches('.*@example[.]co[.]za');
+    }
+
+    // Shared project list: every verified DVM user reads, adds and edits.
+    // Only the project's lead or its creator may delete it; who created it can never be changed.
+    match /projects/{projectId} {
+      allow read: if dvm();
+      allow create: if dvm() && request.resource.data.createdBy == me();
+      allow update: if dvm()
+        && request.resource.data.get('createdBy', null) == resource.data.get('createdBy', null)
+        && request.resource.data.get('createdAt', null) == resource.data.get('createdAt', null);
+      allow delete: if dvm()
+        && (resource.data.get('lead', '') == me() || resource.data.get('createdBy', '') == me());
+    }
+
+    // Change feed. Clients create entries as themselves, may add only their own email to seenBy,
+    // and may prune old entries. The notifier (Admin SDK, bypasses rules) sets pushed / backupSent.
+    match /activity/{activityId} {
+      allow read, delete: if dvm();
+      allow create: if dvm()
+        && request.resource.data.by == me()
+        && request.resource.data.important is bool
+        && request.resource.data.seenBy.size() == 0
+        && request.resource.data.pushed == false
+        && request.resource.data.backupSent == false;
+      allow update: if dvm()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['seenBy'])
+        && request.resource.data.seenBy.hasAll(resource.data.seenBy)
+        && request.resource.data.seenBy.size() == resource.data.seenBy.size() + 1
+        && request.resource.data.seenBy.hasAll([me()]);
+    }
+
+    // One profile per person, keyed by lower-case email; each person writes only their own.
+    match /people/{email} {
+      allow read: if dvm();
+      allow create, update: if dvm() && email == me();
+      allow delete: if false;
+    }
+
+    // Device push tokens: each person sees and manages only their own.
+    match /pushTokens/{token} {
+      allow create, update: if dvm() && request.resource.data.email == me();
+      allow read, delete: if dvm() && resource.data.email == me();
+    }
+
+    // meta/* is notifier-only (summary bookkeeping): no client access.
+  }
+}
