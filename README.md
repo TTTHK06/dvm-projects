@@ -8,6 +8,10 @@ A shared project list with milestones and due dates. The page itself is hosted o
 - **Acknowledging.** People acknowledge a change by tapping **Got it** or opening the project. Every important change shows **Seen by x of y**, and tapping it lists who hasn't seen it.
 - **Email backup.** Anyone who hasn't acknowledged an important change within 2 hours gets one email. Emails only go out on weekdays between 07:00 and 18:00, so anything due outside that window waits for the next working morning.
 - **Morning summary.** Every weekday morning everyone gets a push summary of other changes, plus their own overdue and upcoming milestones. People without notifications switched on get it by email.
+- **People who don't use the app.** They can still get updates by email, in three ways:
+  - **On a project without an account:** type their DVM email as lead, team member or milestone owner. They get instant emails about that project, and that project's part of the morning summary.
+  - **On the `EMAIL_ONLY` list:** they get instant emails about every project, plus the morning summary.
+  - **Signed up but prefer email:** they tick **Email me instead of phone notifications** under **Your account**.
 - **Who has notifications on.** **Your account > Team notifications** shows which staff have them switched on.
 
 Allow about 45 minutes. You do this once.
@@ -84,6 +88,7 @@ The app won't start until all three are filled in.
 | `DIGEST_HOUR` | optional, hour of the morning summary (SAST), default `7` |
 | `BACKUP_HOURS` | optional, hours before an unseen important change is emailed, default `4` (set to `2` for DVM) |
 | `BACKUP_TO` | your email address; receives the weekly data backup every Monday morning |
+| `EMAIL_ONLY` | optional, staff who never use the app but should get every update by email, comma separated, e.g. `piet@devmoore.co.za, anna@devmoore.co.za` |
 
 5. Go to **Actions** and enable workflows if GitHub asks. Then run **Notifications > Run workflow**:
    - first with **dry run** ticked, which prints the emails in the log without sending anything;

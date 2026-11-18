@@ -426,7 +426,8 @@ main{max-width:1280px;margin:0 auto;padding:18px 20px 60px}
   <div class="sh-body">
     <p class="muted" id="acctEmail"></p>
     <div class="field"><label for="acctName">Name shown to colleagues</label><input id="acctName" type="text" autocomplete="name"></div>
-    <p class="muted" style="font-size:13.5px">Important updates (new projects, milestones added, removed or re-dated) arrive as notifications on every device where you’ve turned them on. If you haven’t seen one within 2 hours, it’s emailed to this address. Each weekday morning you get a summary of other changes and your upcoming milestones.</p>
+    <label class="toggle" style="color:var(--ink);margin:4px 0 8px"><input type="checkbox" id="acctEmailInstead"> Email me instead of phone notifications</label>
+    <p class="muted" style="font-size:13.5px">Important updates (new projects, milestones added, removed or re-dated) arrive as notifications on every device where you’ve turned them on, or by email within about 15–30 minutes if you tick the box above. If you use phone notifications and haven’t opened an update within 2 hours, it’s emailed to this address. Each weekday morning you get a summary of other changes and your upcoming milestones.</p>
     <h3 class="install-h">Team notifications</h3>
     <p class="muted" id="teamSum" style="font-size:13.5px"></p>
     <div id="teamList"></div>
@@ -517,7 +518,7 @@ function ago(ms){
   return new Date(ms).toLocaleDateString("en-GB",{day:"numeric",month:"short",year:"numeric"});
 }
 function allowed(email){ const e=lc(email); return /^[^\s@]+@[^\s@]+$/.test(e) && DOMAINS.some(d=>e.endsWith("@"+d)); }
-function pname(e){ if(!e) return "Unassigned"; const p=S.people[e]; return (p&&p.name)||(e===S.me?"You":e.split("@")[0]); }
+function pname(e){ if(!e) return "Unassigned"; const p=S.people[e]; if (p&&p.name) return p.name; if (e===S.me) return "You"; return e.split("@")[0].replace(/[._-]+/g," ").trim().replace(/\b\w/g,c=>c.toUpperCase()); }
 const TOKEN = /\{\{([^{}\s]+)\}\}/g;
 function T(e){ return e ? "{{"+e+"}}" : "Unassigned"; }
 function untok(line){ return String(line).replace(TOKEN,(_,e)=>pname(e)); }
@@ -738,7 +739,7 @@ function peoplePicker({ids, multi, onChange, label}){
       &&(!q||(p.name||"").toLowerCase().includes(q)||p.email.includes(q)))
       .sort((a,b)=>(a.name||a.email).localeCompare(b.name||b.email)).slice(0,8)
       .map(p=>({email:p.email,label:p.name||p.email,sub:p.email}));
-    if (q && allowed(q) && !S.people[q] && !cur.includes(q)) opts.push({email:q,label:"Add "+q,sub:"Hasn’t signed in yet; they’ll get emails"});
+    if (q && allowed(q) && !S.people[q] && !cur.includes(q)) opts.push({email:q,label:"Add "+q,sub:"No account: gets this project’s updates by email"});
     rc(menu,...(opts.length?opts.map(o=>el("button",{type:"button",class:"pp-opt",role:"option",onmousedown:e=>e.preventDefault(),onclick:()=>pick(o.email)},
         avatar(o.email),el("span",null,el("span",{text:o.label}),el("br"),el("small",{class:"muted",text:o.sub}))))
       :[el("div",{class:"pp-empty",text:q?"No colleague matches. Type their full DVM email to add them.":"No colleagues have signed in yet. Type a full DVM email."})]));
@@ -789,7 +790,7 @@ function buildDrawer(){
       el("div",{class:"field"},el("label",{for:"fStatus",text:"Status"}),statusSel),
       el("div",{class:"field"},el("label",{for:"fStage",text:"Stage"}),inp("stage",{id:"fStage",list:"dlStages",placeholder:"Choose or type"})),
       el("div",{class:"field"},el("span",{class:"flabel",text:"Lead"}),peoplePicker({ids:d.lead?[d.lead]:[],multi:false,label:"Lead",onChange:v=>{ d.lead=v; }})),
-      el("div",{class:"field"},el("span",{class:"flabel",text:"Team (notified of date changes)"}),peoplePicker({ids:d.team,multi:true,label:"Team",onChange:v=>{ d.team=v; }})),
+      el("div",{class:"field"},el("span",{class:"flabel",text:"Team (type a DVM email to add someone who doesn’t use the app)"}),peoplePicker({ids:d.team,multi:true,label:"Team",onChange:v=>{ d.team=v; }})),
       el("div",{class:"field full"},el("label",{for:"fNotes",text:"Notes"}),notes)),
     el("div",{class:"sect"},el("span",{text:"Milestones and due dates"}),
       el("button",{class:"btn",type:"button",onclick:()=>{ d.milestones.push({id:rid(),label:"",due:"",owner:null,done:false}); drawMilestones(true); }},"+ Add milestone")),
@@ -915,21 +916,22 @@ async function onDelete(){
 }
 
 /* ---------- account sheet ---------- */
-function openAcct(){ $("acctEmail").textContent="Signed in as "+S.me; $("acctName").value=(S.people[S.me]&&S.people[S.me].name)||""; drawTeam(); $("acctSheet").hidden=false; syncScrim(); $("acctName").focus(); }
+function openAcct(){ $("acctEmail").textContent="Signed in as "+S.me; $("acctName").value=(S.people[S.me]&&S.people[S.me].name)||""; $("acctEmailInstead").checked=!!(S.people[S.me]&&S.people[S.me].emailInstead); drawTeam(); $("acctSheet").hidden=false; syncScrim(); $("acctName").focus(); }
 function drawTeam(){
   const ps=Object.values(S.people).filter(p=>p.email).sort((a,b)=>(a.name||a.email).localeCompare(b.name||b.email));
-  const on=ps.filter(p=>p.pushEnabled).length;
-  $("teamSum").textContent=on+" of "+ps.length+" have notifications on. The rest get important updates by email.";
+  const on=ps.filter(p=>p.pushEnabled&&!p.emailInstead).length;
+  $("teamSum").textContent=on+" of "+ps.length+" have phone notifications on. The rest get important updates by email.";
   rc($("teamList"),...ps.map(p=>el("div",{class:"team-row"},avatar(p.email),
     el("span",{class:"tn",text:(p.name||p.email)+(p.email===S.me?" (you)":"")}),
-    el("span",{class:"chip-d "+(p.pushEnabled?"done":"soon"),text:p.pushEnabled?"Notifications on":"Email only"}))));
+    el("span",{class:"chip-d "+(p.emailInstead?"ok":p.pushEnabled?"done":"soon"),text:p.emailInstead?"Email instead":p.pushEnabled?"Notifications on":"Email backup only"}))));
 }
 function closeAcct(){ $("acctSheet").hidden=true; syncScrim(); }
 async function saveName(){
   const n=$("acctName").value.trim(); if (!n){ toast("Enter your name."); return; }
-  if (await write(()=>setDoc(doc(fs,"people",S.me),{email:S.me,name:n},{merge:true}))){
+  const ei=$("acctEmailInstead").checked;
+  if (await write(()=>setDoc(doc(fs,"people",S.me),{email:S.me,name:n,emailInstead:ei},{merge:true}))){
     try{ await updateProfile(auth.currentUser,{displayName:n}); }catch(_){}
-    closeAcct(); toast("Name saved.");
+    closeAcct(); toast(ei?"Saved. Updates will come by email.":"Saved.");
   }
 }
 
@@ -1030,7 +1032,7 @@ async function onEnablePush(){
 function drawPushCard(){
   const c=$("pushCard"), st=S.push.state;
   const dismissable=st==="unsupported"||st==="denied";
-  if (st==="on"||st==="pending"||st==="unconfigured"||(dismissable&&recall("dvmPushHide")===st)){ c.hidden=true; return; }
+  if ((S.people[S.me]&&S.people[S.me].emailInstead)||st==="on"||st==="pending"||st==="unconfigured"||(dismissable&&recall("dvmPushHide")===st)){ c.hidden=true; return; }
   c.hidden=false;
   rc(c,el("span",{class:"pc-tx",text:PUSH_TEXT[st]+(st==="error"?S.push.err+".":"")}),
     st==="ask"?el("button",{class:"btn primary",type:"button",onclick:onEnablePush},"Turn on"):null,
@@ -1159,7 +1161,7 @@ async function startApp(user){
   },onErr("notifications")));
   S.unsubs.push(onSnapshot(collection(fs,"people"),snap=>{
     const p={}; snap.forEach(d=>{ const v=d.data(); p[d.id]=Object.assign({email:d.id},v); });
-    S.people=p; scheduleRender();
+    S.people=p; scheduleRender(); drawPushCard();
   },onErr("people list")));
   initPush();
 }
