@@ -540,7 +540,12 @@ function banner(msg){ const b=$("banner"); b.textContent=msg||""; b.hidden=!msg;
    WRITE_WAIT_MS the change is reported as queued; a later server rejection still shows a toast. */
 async function write(fn){
   let p; try{ p=fn(); }catch(e){ writeErr(e); return false; }
-  const settled=p.then(()=>"ok", e=>{ writeErr(e); return "err"; });
+  const settled=p.then(()=>"ok", async e=>{
+    if (e&&e.code==="permission-denied"&&await freshToken(true)){
+      try{ await fn(); return "ok"; }catch(e2){ writeErr(e2); return "err"; }
+    }
+    writeErr(e); return "err";
+  });
   const r=await Promise.race([settled, new Promise(res=>setTimeout(()=>res("queued"),WRITE_WAIT_MS))]);
   if (r==="queued"){ toast("Saved on this device. It will sync when you’re back online."); return true; }
   return r==="ok";
@@ -1133,9 +1138,22 @@ onAuthStateChanged(auth, user=>{
   startApp(user);
 });
 
+/* The security rules read email_verified from the ID token, which can be older than the account
+   (verified in another tab or device). Refresh it whenever it lags behind. */
+async function freshToken(force){
+  const u=auth.currentUser; if (!u) return false;
+  try{
+    const r=await u.getIdTokenResult(false);
+    if (!force&&r.claims.email_verified===true) return true;
+    await u.reload();
+    await u.getIdToken(true);
+    return (await u.getIdTokenResult(false)).claims.email_verified===true;
+  }catch(_){ return false; }
+}
 async function startApp(user){
   if (S.me===lc(user.email)) return;
   stopApp();
+  await freshToken(false);
   S.me=lc(user.email);
   $("auth").hidden=true; $("verify").hidden=true; $("app").hidden=false;
   render();
