@@ -9,6 +9,11 @@
                people's changes since the last summary plus their own overdue / due-in-7-days
                milestones. People with no working push device get it by email instead.
 
+   Email-only people get INSTANT EMAILS for important changes instead of pushes, and their summary by email:
+     - EMAIL_ONLY list (GitHub variable): every project, no account needed;
+     - people who switched on "Email me instead" in the app: every project;
+     - anyone named on a project (lead, team, milestone owner) who has no account: that project only.
+
    Settings (GitHub Actions secrets / variables):
      FIREBASE_SERVICE_ACCOUNT  service-account JSON (secret)
      SMTP_HOST, SMTP_PORT, SMTP_USER, SMTP_PASS (secrets), MAIL_FROM (optional secret)
@@ -17,6 +22,7 @@
      DIGEST_HOUR               optional, default 7
      BACKUP_HOURS              optional, default 4
      BACKUP_TO                 address that receives the weekly data backup (Mondays, with the summary)
+     EMAIL_ONLY                optional, comma separated staff addresses that get every update by email
      DRY_RUN                   "1": print instead of sending, write nothing
      FORCE_DIGEST              "1": send the summary now regardless of time/day
      FORCE_BACKUP              "1": send the weekly data backup now                                */
@@ -53,7 +59,8 @@ export function fmtDate(ymd) {
   return new Date(Date.UTC(+m[1], +m[2] - 1, +m[3])).toLocaleDateString("en-GB", { weekday: "short", day: "numeric", month: "short", year: "numeric", timeZone: "UTC" });
 }
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
-export function namer(people) { return e => (e && people[e] && people[e].name) || (e ? e.split("@")[0] : "Unassigned"); }
+const localName = e => { const l = e.split("@")[0].replace(/[._-]+/g, " ").trim(); return l.replace(/\b\w/g, c => c.toUpperCase()); };
+export function namer(people) { return e => (e && people[e] && people[e].name) || (e ? localName(e) : "Unassigned"); }
 const first = n => String(n).trim().split(/\s+/)[0] || n;
 export const untok = (line, name) => String(line).replace(/\{\{([^{}\s]+)\}\}/g, (_, e) => name(e));
 const clip = (s, n) => s.length > n ? s.slice(0, n - 1) + "…" : s;
@@ -68,6 +75,32 @@ export function pushForActivity(a, id, name, appUrl) {
   return { title: clip(`${name(a.by)} updated ${a.project || "a project"}`, 90), body: clip(lines.join("; "), 220),
     tag: "a-" + id, url: appUrl + (a.projectId ? "#p-" + encodeURIComponent(a.projectId) : "#updates") };
 }
+export function parseList(s, allowed) { return [...new Set(String(s || "").split(/[,;\s]+/).map(lc).filter(e => e && allowed(e)))]; }
+/** People in the people map who chose email instead of push. */
+export function emailInsteadSet(people) { return new Set(Object.entries(people).filter(([, p]) => p && p.emailInstead).map(([e]) => lc(e))); }
+/** Everyone on a project (lead, team, milestone owners). */
+export function projectPeople(p) { return [...new Set([p && p.lead, ...((p && p.team) || []), ...(((p && p.milestones) || []).map(m => m.owner))].map(lc).filter(Boolean))]; }
+/** Who gets an instant EMAIL for important change a (instead of a push). */
+export function instantEmailTargets(a, project, people, emailOnly, allowed) {
+  const out = new Set(emailOnly);
+  for (const [e, p] of Object.entries(people))
+    if (p && p.emailInstead && !(typeof p.joinedAt === "number" && p.joinedAt > a.at)) out.add(lc(e));
+  const involved = project ? projectPeople(project) : (a.to || []).map(lc);
+  for (const e of involved) if (!people[e]) out.add(e);        // named on the project, no account
+  out.delete(lc(a.by));
+  return [...out].filter(allowed);
+}
+export function instantEmail(to, items, name, appUrl, member) {
+  const subject = `[DVM projects] ${items.length === 1 ? "Update: " + (items[0].project || "a project") : items.length + " project updates"}`;
+  const blocks = items.map(a => ({ head: `${name(a.by)} changed ${a.project || "a project"}`, lines: (a.lines || []).map(l => untok(l, name)) }));
+  const foot = member ? `Open the register: ${appUrl}` :
+    `You get these emails because you are named on a project in the DVM project register, or are on its email list. You can view the register by signing up at ${appUrl} with your DVM email.`;
+  const text = `Hi ${first(name(to))},\n\n` + blocks.map(b => b.head + "\n" + b.lines.map(l => "  - " + l).join("\n")).join("\n\n") + `\n\n${foot}\n`;
+  const html = `<p>Hi ${esc(first(name(to)))},</p>` + blocks.map(b => `<p style="margin:14px 0 4px"><b>${esc(b.head)}</b></p><ul style="margin:0">${b.lines.map(l => `<li>${esc(l)}</li>`).join("")}</ul>`).join("") +
+    `<p style="margin-top:18px;color:#5B6776">${member ? `<a href="${esc(appUrl)}">Open the project register</a>` : esc(foot)}</p>`;
+  return { to, subject, text, html };
+}
+
 /** Backup plan: which important changes are due for an email and to whom. */
 export function backupPlan(docs, people, allowed, nowMs, backupMs) {
   const byRecipient = new Map(), done = [], wait = [];
@@ -202,24 +235,39 @@ async function main() {
       return reached;
     };
 
-    /* A. Instant pushes for important changes */
+    /* A. Instant pushes (and instant emails for email-only people) for important changes */
+    const projects = (await db.collection("projects").get()).docs.map(d => ({ id: d.id, ...d.data() }));
+    const projById = new Map(projects.map(p => [p.id, p]));
+    const emailOnly = parseList(process.env.EMAIL_ONLY, allowed);
+    const viaEmail = emailInsteadSet(people);
+    const pushPeople = Object.fromEntries(Object.entries(people).filter(([e]) => !viaEmail.has(lc(e))));
     const pend = await db.collection("activity").where("pushed", "==", false).limit(300).get();
-    const pushList = [];
+    const pushList = [], mailMap = new Map();
     for (const d of pend.docs) {
       const a = d.data();
       if (!a.important || typeof a.at !== "number" || now - a.at > STALE_MS) continue;
       const msg = pushForActivity(a, d.id, name, appUrl);
-      for (const e of audience(people, a, allowed)) pushList.push({ email: e, msg });
+      const pushTo = new Set(audience(pushPeople, a, allowed));
+      for (const e of pushTo) pushList.push({ email: e, msg });
+      for (const e of instantEmailTargets(a, projById.get(a.projectId), people, emailOnly, allowed)) {
+        if (pushTo.has(e)) continue;
+        if (!mailMap.has(e)) mailMap.set(e, []); mailMap.get(e).push(a);
+      }
     }
     try {
       const reached = await push(pushList);
       console.log(`push: ${pend.size} new change(s), ${pushList.length} person-notification(s), ${reached.size} people reached`);
+      for (const [to, items] of mailMap) {
+        items.sort((x, y) => x.at - y.at);
+        try { await sendMail(instantEmail(to, items, name, appUrl, !!people[to])); console.log(`email-only: ${items.length} update(s) to ${to}`); }
+        catch (e) { failures++; console.error(`email-only: FAILED to ${to}: ${e.message}`); }
+      }
       if (!DRY && pend.size) { const b = db.batch(); pend.docs.forEach(d => b.update(d.ref, { pushed: true, pushedAt: now })); await b.commit(); }
     } catch (e) { failures++; console.error("push: FCM call failed, will retry next run:", e.message); }
 
     /* B. Email backup for unacknowledged important changes */
     const imp = await db.collection("activity").where("important", "==", true).where("backupSent", "==", false).limit(300).get();
-    const plan = backupPlan(imp.docs.map(d => ({ id: d.id, data: d.data() })), people, allowed, now, backupMs);
+    const plan = backupPlan(imp.docs.map(d => ({ id: d.id, data: d.data() })), pushPeople, allowed, now, backupMs);
     const working = t.workday && t.hour >= WORK_START && t.hour < WORK_END;
     if (plan.byRecipient.size && !working) console.log(`backup: ${plan.byRecipient.size} recipient(s) waiting for working hours`);
     else {
@@ -246,15 +294,23 @@ async function main() {
     if ((t.workday && t.hour >= digestHour && lastDate !== t.ymd) || process.env.FORCE_DIGEST === "1") {
       const since = meta.exists && typeof meta.data().at === "number" ? meta.data().at : now - 86400000;
       const changes = (await db.collection("activity").where("at", ">", since).limit(1000).get()).docs.map(d => d.data());
-      const due = dueByPerson((await db.collection("projects").get()).docs.map(d => ({ id: d.id, ...d.data() })), allowed, t.ymd);
+      const due = dueByPerson(projects, allowed, t.ymd);
       const summaries = [];
       for (const email of Object.keys(people)) {
         if (!allowed(email)) continue;
         const s = summaryFor(email, changes, due.get(email) || [], name, appUrl);
-        if (s) summaries.push({ email, s });
+        if (s) summaries.push({ email, s, push: !viaEmail.has(lc(email)) });
+      }
+      // People without an account: the EMAIL_ONLY list (all changes) and project contacts (their projects only)
+      const contacts = new Map();
+      for (const p of projects) for (const e of projectPeople(p)) if (allowed(e) && !people[e]) { if (!contacts.has(e)) contacts.set(e, new Set()); contacts.get(e).add(p.id); }
+      for (const e of new Set([...emailOnly.filter(x => !people[x]), ...contacts.keys()])) {
+        const mine = emailOnly.includes(e) ? changes : changes.filter(a => contacts.get(e).has(a.projectId));
+        const s = summaryFor(e, mine, due.get(e) || [], name, appUrl);
+        if (s) summaries.push({ email: e, s, push: false });
       }
       let reached = new Set();
-      try { reached = await push(summaries.map(({ email, s }) => ({ email, msg: s.push }))); }
+      try { reached = await push(summaries.filter(x => x.push).map(({ email, s }) => ({ email, msg: s.push }))); }
       catch (e) { failures++; console.error("summary: push failed, falling back to email for everyone:", e.message); }
       for (const { email, s } of summaries) {
         if (reached.has(email)) continue;
