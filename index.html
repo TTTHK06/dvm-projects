@@ -871,13 +871,16 @@ function diffLines(prev,next){
     for (const o of prev.milestones||[]) if (!nm.has(o.id)){ lines.push("Removed milestone: "+o.label); uniq([...stake,o.owner]).forEach(x=>to.add(x)); important=true; }
   }
   to.delete(me); to.delete(null); to.delete(undefined); to.delete("");
-  return {lines, to:[...to], important};
+  const onProj=p=>uniq([p&&p.lead,...((p&&p.team)||[]),...(((p&&p.milestones)||[]).map(m=>m.owner))]);
+  const before=new Set(prev?onProj(prev):[]);
+  const added=onProj(next).filter(e=>!before.has(e)&&e!==me);
+  return {lines, to:[...to], important, added};
 }
-async function addActivity(projectId, project, lines, to, important){
+async function addActivity(projectId, project, lines, to, important, added){
   if (!lines.length) return;
   const now=Date.now();
   await write(()=>setDoc(doc(collection(fs,"activity")),{at:now,by:S.me,projectId,project,lines:lines.slice(0,20),to,
-    important:!!important,seenBy:[],pushed:false,backupSent:false}));
+    added:added||[],important:!!important,seenBy:[],pushed:false,backupSent:false}));
   try{ // housekeeping: drop entries past the retention window, a few at a time
     const old=await getDocs(query(collection(fs,"activity"),where("at","<",now-ACTIVITY_KEEP_DAYS*86400000),limit(20)));
     for (const d of old.docs) await deleteDoc(d.ref);
@@ -900,9 +903,9 @@ async function onSave(){
   if (pid) ok=await write(()=>updateDoc(doc(fs,"projects",pid),body));
   else { const ref=doc(collection(fs,"projects")); pid=ref.id; ok=await write(()=>setDoc(ref,Object.assign({createdAt:now,createdBy:S.me},body))); }
   if (!ok){ D.saving=false; if (sb){ sb.disabled=false; sb.textContent=D.id?"Save":"Add"; } return; }
-  const {lines,to,important}=diffLines(D.orig, body);
-  closeDrawer(); toast(D.id?"Changes saved.":"Project added.");
-  await addActivity(pid, projLabel(body), lines, to, important);
+  const {lines,to,important,added}=diffLines(D.orig, body);
+  closeDrawer(); toast(D.id?"Changes saved.":"Project added."+(added.length?" "+added.length+" "+(added.length===1?"person":"people")+" will get the project details by email.":""));
+  await addActivity(pid, projLabel(body), lines, to, important, added);
 }
 async function onDelete(){
   const D=S.drawer; if (!D||!D.id) return;

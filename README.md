@@ -8,6 +8,7 @@ A shared project list with milestones and due dates. The page itself is hosted o
 - **Acknowledging.** People acknowledge a change by tapping **Got it** or opening the project. Every important change shows **Seen by x of y**, and tapping it lists who hasn't seen it.
 - **Email backup.** Anyone who hasn't acknowledged an important change within 2 hours gets one email. Emails only go out on weekdays between 07:00 and 18:00, so anything due outside that window waits for the next working morning.
 - **Morning summary.** Every weekday morning everyone gets a push summary of other changes, plus their own overdue and upcoming milestones. People without notifications switched on get it by email.
+- **Project details on joining.** Whenever someone is newly made lead, team member or milestone owner, they get a "You've been added" email with the full project details: client, stage, lead, team, milestones with dates and owners, and notes. This applies whether or not they have an account.
 - **People who don't use the app.** They can still get updates by email, in three ways:
   - **On a project without an account:** type their DVM email as lead, team member or milestone owner. They get instant emails about that project, and that project's part of the morning summary.
   - **On the `EMAIL_ONLY` list:** they get instant emails about every project, plus the morning summary.
