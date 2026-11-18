@@ -6,7 +6,7 @@ A shared project list with milestones and due dates. The page itself is hosted o
 
 - **Important changes push to everyone.** A new or deleted project, or a milestone added, removed, re-dated or reopened, is pushed as a notification to every staff member's devices.
 - **Acknowledging.** People acknowledge a change by tapping **Got it** or opening the project. Every important change shows **Seen by x of y**, and tapping it lists who hasn't seen it.
-- **Email backup.** Anyone who hasn't acknowledged an important change within 4 hours gets one email. Emails only go out on weekdays between 07:00 and 18:00, so anything due outside that window waits for the next working morning.
+- **Email backup.** Anyone who hasn't acknowledged an important change within 2 hours gets one email. Emails only go out on weekdays between 07:00 and 18:00, so anything due outside that window waits for the next working morning.
 - **Morning summary.** Every weekday morning everyone gets a push summary of other changes, plus their own overdue and upcoming milestones. People without notifications switched on get it by email.
 - **Who has notifications on.** **Your account > Team notifications** shows which staff have them switched on.
 
@@ -82,7 +82,7 @@ The app won't start until all three are filled in.
 | `APP_URL` | `https://<your-username>.github.io/dvm-projects/` |
 | `ALLOWED_DOMAINS` | DVM's domain, e.g. `dvm.co.za` |
 | `DIGEST_HOUR` | optional, hour of the morning summary (SAST), default `7` |
-| `BACKUP_HOURS` | optional, hours before an unseen important change is emailed, default `4` |
+| `BACKUP_HOURS` | optional, hours before an unseen important change is emailed, default `4` (set to `2` for DVM) |
 | `BACKUP_TO` | your email address; receives the weekly data backup every Monday morning |
 
 5. Go to **Actions** and enable workflows if GitHub asks. Then run **Notifications > Run workflow**:
@@ -99,7 +99,7 @@ The app won't start until all three are filled in.
 3. **Test a push.** Ask a colleague to do the same. Then add a project and save.
    - Within 15 to 30 minutes their phone should show a notification. GitHub's scheduler sets that delay.
    - Tapping the notification should open the project.
-4. **Test the email backup.** Ask them *not* to open it. After 4 hours, during working hours, they should get the backup email.
+4. **Test the email backup.** Ask them *not* to open it. After 2 hours, during working hours, they should get the backup email.
 5. **Check the counts.** Under the bell > **All changes**, the change should show "Seen by 0 of 1", then "1 of 1" after they tap **Got it**.
 
 ## How it behaves
@@ -130,7 +130,7 @@ The app won't start until all three are filled in.
 ## Things to know
 
 - **GitHub pauses scheduled jobs after 60 days with no activity in a public repository.** GitHub emails the owner first; click **Enable workflow** under Actions, or make any small commit. If emails stop arriving, check this first.
-- **Notifications can be switched off by the person.** If someone switches notifications off in their phone settings, or blocks them, their device stops receiving pushes. They drop to **Email only** in the team list within about 15 minutes, and from then on they get important updates by email after 4 hours.
+- **Notifications can be switched off by the person.** If someone switches notifications off in their phone settings, or blocks them, their device stops receiving pushes. They drop to **Email only** in the team list within about 15 minutes, and from then on they get important updates by email after 2 hours.
 - **Junk mail.** Emails from a new Gmail sender may land in junk at first. Mark one as "not junk", or ask IT to allow the sender.
 - **Free-tier limits.**
   - Firestore's free tier allows 50,000 reads and 20,000 writes a day. A team of 20 to 30 people won't come close.
