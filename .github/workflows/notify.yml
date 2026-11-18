@@ -50,6 +50,7 @@ jobs:
           DIGEST_HOUR: ${{ vars.DIGEST_HOUR }}
           BACKUP_HOURS: ${{ vars.BACKUP_HOURS }}
           BACKUP_TO: ${{ vars.BACKUP_TO }}
+          EMAIL_ONLY: ${{ vars.EMAIL_ONLY }}
           FORCE_BACKUP: ${{ github.event.inputs.force_backup == 'true' && '1' || '' }}
           FORCE_DIGEST: ${{ github.event.inputs.force_digest == 'true' && '1' || '' }}
           DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '' }}
