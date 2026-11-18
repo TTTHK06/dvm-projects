@@ -101,6 +101,36 @@ export function instantEmail(to, items, name, appUrl, member) {
   return { to, subject, text, html };
 }
 
+/** "You've been added" email: full project details for someone newly named on a project. */
+export function addedEmail(to, a, p, name, appUrl, member) {
+  const label = [p.jobNo, p.name].filter(Boolean).join(" ") || "a project";
+  const roles = [];
+  if (lc(p.lead) === to) roles.push("project lead");
+  if ((p.team || []).map(lc).includes(to)) roles.push("team member");
+  const owns = (p.milestones || []).filter(m => lc(m.owner) === to).map(m => m.label);
+  if (owns.length) roles.push("owner of " + owns.join(", "));
+  const status = { active: "Active", hold: "On hold", complete: "Complete" }[p.status || "active"] || p.status;
+  const ms = [...(p.milestones || [])].sort((x, y) => String(x.due).localeCompare(String(y.due)));
+  const msLine = m => `${m.label}: ${fmtDate(m.due)}${m.owner ? ", " + name(lc(m.owner)) : ""}${m.done ? " (done)" : ""}`;
+  const team = (p.team || []).map(e => name(lc(e))).join(", ") || "none";
+  const rows = [["Job number", p.jobNo || "-"], ["Project", p.name || "-"], ["Client", p.client || "-"], ["Stage", p.stage || "-"],
+    ["Status", status], ["Lead", p.lead ? name(lc(p.lead)) : "Unassigned"], ["Team", team]];
+  const foot = member ? `Open the register: ${appUrl}` :
+    `You don’t have a register account, so updates to this project will reach you by email. To view or edit it yourself, sign up at ${appUrl} with your DVM email.`;
+  const subject = `[DVM projects] You’ve been added to ${label}`;
+  const text = `Hi ${first(name(to))},\n\n${name(a.by)} added you to ${label}${roles.length ? " as " + roles.join(" and ") : ""}.\n\n` +
+    rows.map(([k, v]) => `${k}: ${v}`).join("\n") +
+    `\n\nMilestones:\n${ms.length ? ms.map(m => "  - " + msLine(m)).join("\n") : "  (none yet)"}\n` +
+    (p.notes ? `\nNotes:\n${p.notes}\n` : "") + `\n${foot}\n`;
+  const td = 'style="padding:3px 14px 3px 0;vertical-align:top"';
+  const html = `<p>Hi ${esc(first(name(to)))},</p><p><b>${esc(name(a.by))}</b> added you to <b>${esc(label)}</b>${roles.length ? " as " + esc(roles.join(" and ")) : ""}.</p>` +
+    `<table style="border-collapse:collapse;font-size:14px">${rows.map(([k, v]) => `<tr><td ${td}><b>${esc(k)}</b></td><td ${td}>${esc(v)}</td></tr>`).join("")}</table>` +
+    `<p style="margin:14px 0 4px"><b>Milestones</b></p><ul style="margin:0">${ms.length ? ms.map(m => `<li>${esc(msLine(m))}</li>`).join("") : "<li>none yet</li>"}</ul>` +
+    (p.notes ? `<p style="margin:14px 0 4px"><b>Notes</b></p><p style="white-space:pre-wrap;margin:0">${esc(p.notes)}</p>` : "") +
+    `<p style="margin-top:18px;color:#5B6776">${member ? `<a href="${esc(appUrl)}">Open the project register</a>` : esc(foot)}</p>`;
+  return { to, subject, text, html };
+}
+
 /** Backup plan: which important changes are due for an email and to whom. */
 export function backupPlan(docs, people, allowed, nowMs, backupMs) {
   const byRecipient = new Map(), done = [], wait = [];
@@ -242,21 +272,34 @@ async function main() {
     const viaEmail = emailInsteadSet(people);
     const pushPeople = Object.fromEntries(Object.entries(people).filter(([e]) => !viaEmail.has(lc(e))));
     const pend = await db.collection("activity").where("pushed", "==", false).limit(300).get();
-    const pushList = [], mailMap = new Map();
+    const pushList = [], mailMap = new Map(), addedMails = [];
     for (const d of pend.docs) {
       const a = d.data();
-      if (!a.important || typeof a.at !== "number" || now - a.at > STALE_MS) continue;
+      if (typeof a.at !== "number" || now - a.at > STALE_MS) continue;
+      // "You've been added" emails go to everyone newly named on the project, account or not
+      const proj = projById.get(a.projectId);
+      const addedTo = new Set();
+      if (proj && Array.isArray(a.added)) for (const e of new Set(a.added.map(lc))) {
+        if (!allowed(e) || e === lc(a.by)) continue;
+        const still = projectPeople(proj).includes(e);           // skip if removed again before we ran
+        if (still) { addedTo.add(e); addedMails.push(addedEmail(e, a, proj, name, appUrl, !!people[e])); }
+      }
+      if (!a.important) continue;
       const msg = pushForActivity(a, d.id, name, appUrl);
       const pushTo = new Set(audience(pushPeople, a, allowed));
       for (const e of pushTo) pushList.push({ email: e, msg });
       for (const e of instantEmailTargets(a, projById.get(a.projectId), people, emailOnly, allowed)) {
-        if (pushTo.has(e)) continue;
+        if (pushTo.has(e) || addedTo.has(e)) continue;        // the "added" email already covers this change
         if (!mailMap.has(e)) mailMap.set(e, []); mailMap.get(e).push(a);
       }
     }
     try {
       const reached = await push(pushList);
       console.log(`push: ${pend.size} new change(s), ${pushList.length} person-notification(s), ${reached.size} people reached`);
+      for (const m of addedMails) {
+        try { await sendMail(m); console.log(`added: project details sent to ${m.to}`); }
+        catch (e) { failures++; console.error(`added: FAILED to ${m.to}: ${e.message}`); }
+      }
       for (const [to, items] of mailMap) {
         items.sort((x, y) => x.at - y.at);
         try { await sendMail(instantEmail(to, items, name, appUrl, !!people[to])); console.log(`email-only: ${items.length} update(s) to ${to}`); }
