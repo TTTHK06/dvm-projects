@@ -1,0 +1,55 @@
+name: Notifications
+
+on:
+  schedule:
+    - cron: "*/15 * * * *"     # every 15 min (GitHub may start runs late at busy times)
+  workflow_dispatch:
+    inputs:
+      force_digest:
+        description: "Send the morning summary now (test)"
+        type: boolean
+        default: false
+      force_backup:
+        description: "Send the weekly data backup now (test)"
+        type: boolean
+        default: false
+      dry_run:
+        description: "Print emails in the log instead of sending"
+        type: boolean
+        default: false
+
+concurrency:
+  group: notifications
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  notify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: notifier/package-lock.json
+      - run: npm ci --prefix notifier --no-audit --no-fund
+      - run: node notifier/notify.mjs
+        env:
+          FIREBASE_SERVICE_ACCOUNT: ${{ secrets.FIREBASE_SERVICE_ACCOUNT }}
+          SMTP_HOST: ${{ secrets.SMTP_HOST }}
+          SMTP_PORT: ${{ secrets.SMTP_PORT }}
+          SMTP_USER: ${{ secrets.SMTP_USER }}
+          SMTP_PASS: ${{ secrets.SMTP_PASS }}
+          MAIL_FROM: ${{ secrets.MAIL_FROM }}
+          APP_URL: ${{ vars.APP_URL }}
+          ALLOWED_DOMAINS: ${{ vars.ALLOWED_DOMAINS }}
+          DIGEST_HOUR: ${{ vars.DIGEST_HOUR }}
+          BACKUP_HOURS: ${{ vars.BACKUP_HOURS }}
+          BACKUP_TO: ${{ vars.BACKUP_TO }}
+          FORCE_BACKUP: ${{ github.event.inputs.force_backup == 'true' && '1' || '' }}
+          FORCE_DIGEST: ${{ github.event.inputs.force_digest == 'true' && '1' || '' }}
+          DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '' }}
