@@ -28,6 +28,7 @@
      BACKUP_TO                 address that receives the weekly data backup (Mondays, with the summary)
      EMAIL_ONLY                optional, comma separated staff addresses that get every update by email
      REMINDER_DAYS             optional, days before a due date to remind owner + lead, default "7,3,1"
+     GIST_TOKEN, GIST_ID       optional: publish a live calendar feed (dvm-projects.ics) to a secret gist
      DRY_RUN                   "1": print instead of sending, write nothing
      FORCE_DIGEST              "1": send the summary now regardless of time/day
      FORCE_BACKUP              "1": send the weekly data backup now                                */
@@ -253,6 +254,43 @@ export function reminderMessages(to, items, name, appUrl, member) {
   return { push, email: { to, subject, text, html } };
 }
 
+/* ---------- live calendar feed (.ics, RFC 5545) ---------- */
+const icsEsc = t => String(t == null ? "" : t).replace(/\\/g, "\\\\").replace(/;/g, "\\;").replace(/,/g, "\\,").replace(/\r?\n/g, "\\n");
+function icsFold(line) {
+  if (Buffer.byteLength(line) <= 75) return line;
+  const out = []; let cur = "", n = 0;
+  for (const ch of line) { const b = Buffer.byteLength(ch); if (n + b > (out.length ? 74 : 75)) { out.push(cur); cur = ""; n = 0; } cur += ch; n += b; }
+  out.push(cur); return out.join("\r\n ");
+}
+const icsStamp = ms => new Date(typeof ms === "number" && ms > 0 ? ms : 0).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+/** Deterministic feed: same data -> same text, so unchanged data never rewrites the gist. */
+export function buildFeed(projects, name, appUrl) {
+  const L = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//DVM//Project register//EN", "CALSCALE:GREGORIAN", "METHOD:PUBLISH",
+    "X-WR-CALNAME:DVM projects", "X-PUBLISHED-TTL:PT15M", "REFRESH-INTERVAL;VALUE=DURATION:PT15M"];
+  const sorted = [...projects].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+  for (const p of sorted) {
+    if ((p.status || "active") === "complete") continue;
+    const label = [p.jobNo, p.name].filter(Boolean).join(" ") || "Untitled project";
+    const ms = [...(p.milestones || [])].sort((a, b) => String(a.id).localeCompare(String(b.id)));
+    for (const m of ms) {
+      if (m.done || !/^\d{4}-\d{2}-\d{2}$/.test(m.due || "")) continue;
+      const end = new Date(Date.UTC(+m.due.slice(0, 4), +m.due.slice(5, 7) - 1, +m.due.slice(8, 10) + 1)).toISOString().slice(0, 10).replace(/-/g, "");
+      const link = appUrl + "#p-" + encodeURIComponent(p.id);
+      const desc = [`Project: ${label}`, p.client ? `Client: ${p.client}` : null, p.stage ? `Stage: ${p.stage}` : null,
+        `Lead: ${p.lead ? name(lc(p.lead)) : "Unassigned"}`, `Owner: ${m.owner ? name(lc(m.owner)) : "Unassigned"}`,
+        p.status === "hold" ? "Status: On hold" : null, "", link].filter(x => x !== null).join("\n");
+      L.push("BEGIN:VEVENT", `UID:${p.id}-${m.id}@dvm-projects`, `DTSTAMP:${icsStamp(p.updatedAt)}`,
+        `DTSTART;VALUE=DATE:${m.due.replace(/-/g, "")}`, `DTEND;VALUE=DATE:${end}`,
+        "SUMMARY:" + icsEsc(`${p.status === "hold" ? "[On hold] " : ""}${m.label} – ${label}`), "DESCRIPTION:" + icsEsc(desc),
+        `URL:${link}`, "TRANSP:TRANSPARENT",
+        "BEGIN:VALARM", "ACTION:DISPLAY", "DESCRIPTION:" + icsEsc(`Due tomorrow: ${m.label}`), "TRIGGER:-PT16H", "END:VALARM",
+        "END:VEVENT");
+    }
+  }
+  L.push("END:VCALENDAR");
+  return L.map(icsFold).join("\r\n") + "\r\n";
+}
+
 /* Weekly data backup: full JSON (for restore.mjs) and a milestone-per-row CSV that opens in Excel. */
 const csvCell = v => { const s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
 export function backupFiles(projects, people, ymd) {
@@ -431,6 +469,27 @@ async function main() {
       console.log(`reminders: ${remMsgs.length} people, ${remReached.size} by push, ${remMsgs.length - remReached.size} by email`);
       if (!DRY) await metaRef.set({ lastDate: t.ymd, at: now });
     } else console.log(`summary: not due (${t.weekday} ${t.ymd} ${t.hour}:00 SAST)`);
+
+    /* E. Live calendar feed: rewrite the secret gist only when the milestones changed */
+    const gistToken = (process.env.GIST_TOKEN || "").trim(), gistId = (process.env.GIST_ID || "").trim();
+    if (gistToken && gistId) {
+      const feed = buildFeed(projects, name, appUrl);
+      const hash = (await import("node:crypto")).createHash("sha256").update(feed).digest("hex");
+      const fRef = db.doc("meta/feed"), fMeta = await fRef.get();
+      if (fMeta.exists && fMeta.data().hash === hash) console.log("feed: unchanged");
+      else if (DRY) console.log(`--- FEED (${feed.length} bytes) would be published`);
+      else {
+        try {
+          const r = await fetch(`https://api.github.com/gists/${encodeURIComponent(gistId)}`, { method: "PATCH",
+            headers: { Authorization: `Bearer ${gistToken}`, Accept: "application/vnd.github+json", "X-GitHub-Api-Version": "2022-11-28",
+              "Content-Type": "application/json", "User-Agent": "dvm-project-register" },
+            body: JSON.stringify({ files: { "dvm-projects.ics": { content: feed } } }) });
+          if (!r.ok) throw new Error(`GitHub answered ${r.status}: ${(await r.text()).slice(0, 200)}`);
+          await fRef.set({ hash, at: now });
+          console.log(`feed: published (${feed.length} bytes)`);
+        } catch (e) { failures++; console.error("feed: FAILED:", e.message); }
+      }
+    }
 
     /* D. Weekly data backup (Mondays after DIGEST_HOUR) */
     const backupTo = (process.env.BACKUP_TO || "").trim();
