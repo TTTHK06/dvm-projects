@@ -9,6 +9,10 @@
                people's changes since the last summary plus their own overdue / due-in-7-days
                milestones. People with no working push device get it by email instead.
 
+   D. Reminders: with the morning run, the milestone owner and project lead get a reminder REMINDER_DAYS
+               before each open milestone (default 7, 3 and 1 days). A reminder that would fall on a
+               Saturday or Sunday is sent on the Friday before. One combined reminder per person per day.
+
    Email-only people get INSTANT EMAILS for important changes instead of pushes, and their summary by email:
      - EMAIL_ONLY list (GitHub variable): every project, no account needed;
      - people who switched on "Email me instead" in the app: every project;
@@ -23,6 +27,7 @@
      BACKUP_HOURS              optional, default 4
      BACKUP_TO                 address that receives the weekly data backup (Mondays, with the summary)
      EMAIL_ONLY                optional, comma separated staff addresses that get every update by email
+     REMINDER_DAYS             optional, days before a due date to remind owner + lead, default "7,3,1"
      DRY_RUN                   "1": print instead of sending, write nothing
      FORCE_DIGEST              "1": send the summary now regardless of time/day
      FORCE_BACKUP              "1": send the weekly data backup now                                */
@@ -196,6 +201,58 @@ export function summaryFor(email, changes, dueItems, name, appUrl) {
   return { push, email: { to: email, subject: `[DVM projects] Morning summary: ${parts.join(" ")}`.slice(0, 160), text, html } };
 }
 
+/* ---------- milestone reminders ---------- */
+export function parseDays(s) {
+  const d = [...new Set(String(s || "7,3,1").split(/[,;\s]+/).map(Number).filter(n => Number.isInteger(n) && n > 0 && n <= 60))];
+  return d.length ? d.sort((a, b) => b - a) : [7, 3, 1];
+}
+const addDays = (ymd, n) => { const [y, m, d] = ymd.split("-").map(Number); const t = new Date(Date.UTC(y, m - 1, d + n));
+  return t.toISOString().slice(0, 10); };
+const dow = ymd => { const [y, m, d] = ymd.split("-").map(Number); return new Date(Date.UTC(y, m - 1, d)).getUTCDay(); }; // 0 Sun .. 6 Sat
+/** The working day on which a reminder k days before `due` is sent (weekend dates move back to Friday). */
+export function reminderSendDate(due, k) {
+  let s = addDays(due, -k); const w = dow(s);
+  if (w === 6) s = addDays(s, -1); else if (w === 0) s = addDays(s, -2);
+  return s;
+}
+/** Map email -> [{project, label, due, days}] of reminders to send today. Owner and lead, active projects, open milestones. */
+export function remindersFor(projects, todayYmd, allowed, days) {
+  const per = new Map();
+  for (const p of projects) {
+    if ((p.status || "active") !== "active") continue;
+    const label = [p.jobNo, p.name].filter(Boolean).join(" ") || "Untitled project";
+    for (const m of p.milestones || []) {
+      if (m.done || !/^\d{4}-\d{2}-\d{2}$/.test(m.due || "")) continue;
+      const left = dayDiff(todayYmd, m.due);
+      if (left == null || left <= 0) continue;
+      if (!days.some(k => reminderSendDate(m.due, k) === todayYmd)) continue;
+      const item = { key: (p.id || label) + "|" + m.id, projectId: p.id, project: label, label: m.label, due: m.due, days: left };
+      for (const e of new Set([m.owner, p.lead].map(lc).filter(Boolean))) {
+        if (!allowed(e)) continue;
+        if (!per.has(e)) per.set(e, new Map());
+        per.get(e).set(item.key, item);
+      }
+    }
+  }
+  const out = new Map();
+  for (const [e, m] of per) out.set(e, [...m.values()].sort((a, b) => a.days - b.days || a.project.localeCompare(b.project)));
+  return out;
+}
+export function reminderMessages(to, items, name, appUrl, member) {
+  const rel = d => d === 1 ? "tomorrow" : `in ${d} days`;
+  const line = i => `${i.label} (${i.project}) due ${rel(i.days)}, ${fmtDate(i.due)}`;
+  const push = items.length === 1
+    ? { title: `Reminder: ${items[0].label} due ${rel(items[0].days)}`, body: `${items[0].project}, ${fmtDate(items[0].due)}`, tag: "rem-" + items[0].key,
+        url: appUrl + (items[0].projectId ? "#p-" + encodeURIComponent(items[0].projectId) : "") }
+    : { title: `Reminder: ${items.length} milestones due soon`, body: clip(items.map(line).join("; "), 220), tag: "reminders", url: appUrl };
+  const subject = `[DVM projects] ${push.title}`;
+  const foot = member ? `Open the register: ${appUrl}` : `You get these reminders because you are named on a project in the DVM project register. ${appUrl}`;
+  const text = `Hi ${first(name(to))},\n\n${items.length === 1 ? "A milestone is coming up:" : "These milestones are coming up:"}\n${items.map(i => "  - " + line(i)).join("\n")}\n\n${foot}\n`;
+  const html = `<p>Hi ${esc(first(name(to)))},</p><p>${items.length === 1 ? "A milestone is coming up:" : "These milestones are coming up:"}</p><ul style="margin:0">${items.map(i => `<li>${esc(line(i))}</li>`).join("")}</ul>` +
+    `<p style="margin-top:18px;color:#5B6776">${member ? `<a href="${esc(appUrl)}">Open the project register</a>` : esc(foot)}</p>`;
+  return { push, email: { to, subject, text, html } };
+}
+
 /* Weekly data backup: full JSON (for restore.mjs) and a milestone-per-row CSV that opens in Excel. */
 const csvCell = v => { const s = v == null ? "" : String(v); return /[",\r\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s; };
 export function backupFiles(projects, people, ymd) {
@@ -360,6 +417,18 @@ async function main() {
         try { await sendMail(s.email); } catch (e) { failures++; console.error(`summary: email FAILED to ${email}: ${e.message}`); }
       }
       console.log(`summary: ${summaries.length} people, ${reached.size} by push, ${summaries.length - reached.size} by email`);
+
+      /* D. Milestone reminders (same once-a-day gate as the summary) */
+      const rem = remindersFor(projects, t.ymd, allowed, parseDays(process.env.REMINDER_DAYS));
+      const remMsgs = [...rem].map(([e, items]) => { const m = reminderMessages(e, items, name, appUrl, !!people[e]); return { to: e, push: m.push, mail: m.email }; });
+      let remReached = new Set();
+      try { remReached = await push(remMsgs.filter(r => people[r.to] && !viaEmail.has(r.to)).map(r => ({ email: r.to, msg: r.push }))); }
+      catch (e) { failures++; console.error("reminders: push failed, falling back to email:", e.message); }
+      for (const r of remMsgs) {
+        if (remReached.has(r.to)) continue;
+        try { await sendMail(r.mail); } catch (e) { failures++; console.error(`reminders: email FAILED to ${r.to}: ${e.message}`); }
+      }
+      console.log(`reminders: ${remMsgs.length} people, ${remReached.size} by push, ${remMsgs.length - remReached.size} by email`);
       if (!DRY) await metaRef.set({ lastDate: t.ymd, at: now });
     } else console.log(`summary: not due (${t.weekday} ${t.ymd} ${t.hour}:00 SAST)`);
 
