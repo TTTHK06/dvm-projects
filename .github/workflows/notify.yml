@@ -51,6 +51,8 @@ jobs:
           BACKUP_HOURS: ${{ vars.BACKUP_HOURS }}
           BACKUP_TO: ${{ vars.BACKUP_TO }}
           EMAIL_ONLY: ${{ vars.EMAIL_ONLY }}
+          GIST_TOKEN: ${{ secrets.GIST_TOKEN }}
+          GIST_ID: ${{ vars.GIST_ID }}
           FORCE_BACKUP: ${{ github.event.inputs.force_backup == 'true' && '1' || '' }}
           FORCE_DIGEST: ${{ github.event.inputs.force_digest == 'true' && '1' || '' }}
           DRY_RUN: ${{ github.event.inputs.dry_run == 'true' && '1' || '' }}
